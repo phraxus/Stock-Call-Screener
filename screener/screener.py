@@ -1,6 +1,16 @@
 from services.asx_api import ASXAPI
+from fastapi import APIRouter
+from screener.screener import get_stock_data
 
 asx = ASXAPI()
+router = APIRouter()
+
+@router.get("/stock/{ticker}")
+def stock(ticker: str, market: str = "AUTO"):
+    data = get_stock_data(ticker, market)
+    if not data:
+        return {"error": "Ticker not found"}
+    return data
 
 def get_asx_stock_data(ticker: str):
     try:
