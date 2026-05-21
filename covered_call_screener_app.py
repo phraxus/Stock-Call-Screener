@@ -165,12 +165,18 @@ def load_asx_universe():
     if not path.exists():
         return []
 
-    df = pd.read_csv(path)
-    if "ticker" not in df.columns:
+    try:
+        df = pd.read_csv(path, header=None)
+    except:
         return []
 
-    # yfinance ASX tickers usually use ".AX" suffix
-    return [f"{t.strip().upper()}.AX" for t in df["ticker"] if isinstance(t, str) and t.strip()]
+    # First column contains tickers, possibly quoted
+    tickers = df[0].astype(str).str.replace('"', '').str.strip()
+
+    # Append .AX for yfinance
+    tickers = [f"{t}.AX" for t in tickers if t and t != "nan"]
+
+    return tickers
 
 # -----------------------------
 # Sidebar filters
