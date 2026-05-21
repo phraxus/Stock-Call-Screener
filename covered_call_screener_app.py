@@ -2,21 +2,16 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 
-# -------------------------------------------------------------------
-# SAFETY NOTE:
-# Streamlit Cloud runs Python 3.14, and yfinance often returns None,
-# empty DataFrames, or missing fields. This version handles ALL cases.
-# -------------------------------------------------------------------
+st.set_page_config(page_title="ASX Covered Call Screener", layout="wide")
 
-st.set_page_config(page_title="Covered Call Screener", layout="wide")
+st.title("📈 ASX Mid‑Cap Covered Call Screener")
+st.caption("Full‑market scan of ASX tickers using a rules‑based covered‑call system.")
 
-st.title("📈 Mid‑Cap Covered Call Screener")
-st.caption("A stable, cloud‑safe version that won't crash on Streamlit Cloud.")
-
-# -------------------------------------------------------------------
-# Helper functions (all wrapped in try/except for cloud stability)
-# -------------------------------------------------------------------
+# -----------------------------
+# Safe helpers around yfinance
+# -----------------------------
 
 def safe_info(ticker):
     try:
@@ -43,12 +38,11 @@ def safe_option_chain(ticker, expiration):
     except:
         return None
 
-# -------------------------------------------------------------------
-# Core logic
-# -------------------------------------------------------------------
+# -----------------------------
+# Core metrics
+# -----------------------------
 
 def get_put_call_ratio(ticker):
-    opts = safe_option_chain(ticker, None)
     try:
         tk = yf.Ticker(ticker)
         chain = tk.option_chain()
@@ -75,7 +69,6 @@ def get_best_contract(ticker, min_dte, max_dte):
     if not valid:
         return None, None
 
-    # pick closest to midpoint
     midpoint = (min_dte + max_dte) / 2
     return sorted(valid, key=lambda x: abs(x[1] - midpoint))[0]
 
@@ -125,9 +118,9 @@ def get_iv_rank(ticker):
 
     return (iv - iv_min) / (iv_max - iv_min) * 100
 
-# -------------------------------------------------------------------
-# Screener
-# -------------------------------------------------------------------
+# -----------------------------
+# Screener logic
+# -----------------------------
 
 def screen_ticker(ticker, min_cap, max_cap, min_pcr, max_pcr, min_dte, max_dte, min_ivr, min_cc_yield):
     info = safe_info(ticker)
@@ -162,15 +155,32 @@ def screen_ticker(ticker, min_cap, max_cap, min_pcr, max_pcr, min_dte, max_dte, 
         "IV_Rank": round(ivr, 2),
     }
 
-# -------------------------------------------------------------------
-# UI
-# -------------------------------------------------------------------
+# -----------------------------
+# Load ASX universe
+# -----------------------------
+
+@st.cache_data
+def load_asx_universe():
+    path = Path("asx_tickers.csv")
+    if not path.exists():
+        return []
+
+    df = pd.read_csv(path)
+    if "ticker" not in df.columns:
+        return []
+
+    # yfinance ASX tickers usually use ".AX" suffix
+    return [f"{t.strip().upper()}.AX" for t in df["ticker"] if isinstance(t, str) and t.strip()]
+
+# -----------------------------
+# Sidebar filters
+# -----------------------------
 
 with st.sidebar:
     st.header("Filters")
 
-    min_cap = st.number_input("Min Market Cap ($B)", 1.0, 100.0, 2.0) * 1e9
-    max_cap = st.number_input("Max Market Cap ($B)", 1.0, 200.0, 10.0) * 1e9
+    min_cap = st.number_input("Min Market Cap ($B)", 0.1, 100.0, 2.0) * 1e9
+    max_cap = st.number_input("Max Market Cap ($B)", 0.1, 500.0, 10.0) * 1e9
 
     min_pcr = st.number_input("Min Put/Call Ratio", 0.0, 5.0, 0.20)
     max_pcr = st.number_input("Max Put/Call Ratio", 0.0, 5.0, 0.70)
@@ -181,28 +191,31 @@ with st.sidebar:
     min_ivr = st.number_input("Min IV Rank", 0.0, 100.0, 30.0)
     min_cc_yield = st.number_input("Min Monthly CC Yield (%)", 0.0, 100.0, 12.0) / 100
 
-st.subheader("Watchlist")
+st.subheader("Universe: ASX full market (from asx_tickers.csv)")
 
-default_watchlist = "AAPL, MSFT, AMD, MU, FSLR, RUN, ENPH, DKNG, RBLX, TTD, NET, PLTR, SQ, ROKU"
-watchlist_input = st.text_area("Enter tickers:", value=default_watchlist)
+tickers = load_asx_universe()
 
-tickers = [t.strip().upper() for t in watchlist_input.replace(",", " ").split() if t.strip()]
-
-if st.button("Run Screener"):
-    results = []
-    progress = st.progress(0)
-
-    for i, t in enumerate(tickers):
-        progress.progress((i + 1) / len(tickers))
-        data = screen_ticker(t, min_cap, max_cap, min_pcr, max_pcr, min_dte, max_dte, min_ivr, min_cc_yield)
-        if data:
-            results.append(data)
-
-    if results:
-        df = pd.DataFrame(results).sort_values("CC_Yield_%", ascending=False)
-        st.success(f"Found {len(df)} matching stocks.")
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.error("No tickers passed all filters.")
+if not tickers:
+    st.error("No ASX universe found. Add 'asx_tickers.csv' with a 'ticker' column to the repo.")
 else:
-    st.info("Adjust filters and click Run Screener.")
+    st.write(f"Loaded **{len(tickers)}** ASX tickers from asx_tickers.csv")
+
+    if st.button("Run Full ASX Scan"):
+        results = []
+        progress = st.progress(0)
+
+        for i, t in enumerate(tickers):
+            progress.progress((i + 1) / len(tickers))
+            data = screen_ticker(t, min_cap, max_cap, min_pcr, max_pcr, min_dte, max_dte, min_ivr, min_cc_yield)
+            if data:
+                results.append(data)
+
+        if results:
+            df = pd.DataFrame(results).sort_values("CC_Yield_%", ascending=False)
+            st.success(f"Found {len(df)} ASX stocks that match all rules.")
+            st.dataframe(df, use_container_width=True)
+
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download results as CSV", csv, "asx_covered_call_screen.csv", "text/csv")
+        else:
+            st.warning("No ASX tickers passed all filters. Loosen thresholds or review your universe file.")
