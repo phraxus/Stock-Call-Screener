@@ -1,3 +1,5 @@
+import streamlit as st
+st.write("App loaded")
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
